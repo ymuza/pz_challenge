@@ -1,0 +1,8 @@
+# Extra dependencies for the AION-based photo-z submission.
+# The base challenge deps (qp-prob, tables_io, pz-rail-projects, scikit-learn)
+# come from the challenge package itself (pip install .[dev]).
+polymathic-aion
+torch>=2.4.0
+safetensors>=0.4.3  # required to load aion-base weights (not always pulled in transitively)
+scikit-learn
+joblib
