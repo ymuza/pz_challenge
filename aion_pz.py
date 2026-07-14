@@ -44,6 +44,12 @@ ROMAN_MAG_COL = "mag_{band}_roman"
 ROMAN_ERR_COL = "mag_{band}_roman_err"
 OBJECT_ID_COL = "object_id"
 REDSHIFT_COL = "redshift"  # truth column, present only in training files
+# Task sets 3/4: COSMOS-selected training objects have no spectroscopic
+# redshift; the challenge provides a many-band photometric redshift instead.
+# Where both exist it agrees with spec-z to sigma_MAD~0.014 with <1% outliers,
+# and the objects lacking spec-z are precisely the faint ones matching the
+# test population, so we use it as a fallback training label.
+MANYBAND_COL = "redshift_manyband"
 
 # Redshift grid for the output PDFs.  The challenge sims live below z~3.
 ZMAX = 3.0
@@ -577,6 +583,10 @@ def train_and_estimate(
 
     train = load_catalog(train_file)
     z_true = np.asarray(train[REDSHIFT_COL], dtype="float64")
+    if MANYBAND_COL in train:
+        z_many = np.asarray(train[MANYBAND_COL], dtype="float64")
+        fill = ~np.isfinite(z_true) & np.isfinite(z_many)
+        z_true[fill] = z_many[fill]
     good = np.isfinite(z_true)
     if not good.all():
         train = {k: v[good] for k, v in train.items()}
