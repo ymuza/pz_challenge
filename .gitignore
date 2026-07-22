@@ -12,6 +12,7 @@ __pycache__/
 _version.py
 build/
 public/
+tests/public
 develop-eggs/
 dist/
 downloads/

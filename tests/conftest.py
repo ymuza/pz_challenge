@@ -22,8 +22,7 @@ def setup_public_area(request: pytest.FixtureRequest) -> int:
         submit_utils.download_and_extract_tar(PUBLIC_URL, "tests")
 
     def teardown_public_area() -> None:
-        if not os.environ.get("NO_TEARDOWN"):
-            os.system("\\rm tests/public")
+        pass
 
     request.addfinalizer(teardown_public_area)
 
