@@ -62,11 +62,18 @@ def make_clean_stage(stage_class: Any, name: str, **kwargs: Any) -> Any:
 
 def get_bands_and_ref(data_keys: list[str]) -> tuple[list[str], str, bool]:
     """Determine the band list and reference band based on catalog columns."""
-    if 'mag_Y_roman' in data_keys:
-        # Roman-like
+    has_roman = 'mag_Y_roman' in data_keys
+    has_lsst = 'mag_i_lsst' in data_keys or 'mag_u_lsst' in data_keys
+    
+    if has_roman and has_lsst:
+        # Combined
+        bands = ['mag_u_lsst', 'mag_g_lsst', 'mag_r_lsst', 'mag_i_lsst', 'mag_z_lsst', 'mag_y_lsst', 'mag_Y_roman', 'mag_J_roman', 'mag_H_roman']
+        return bands, 'mag_i_lsst', False
+    elif has_roman:
+        # Roman-only
         return ['mag_Y_roman', 'mag_J_roman', 'mag_H_roman'], 'mag_J_roman', True
     else:
-        # Rubin-like
+        # Rubin-only
         return ['mag_u_lsst', 'mag_g_lsst', 'mag_r_lsst', 'mag_i_lsst', 'mag_z_lsst', 'mag_y_lsst'], 'mag_i_lsst', False
 
 
@@ -193,6 +200,15 @@ def apply_expert_weights_knn(val_dict: dict[str, np.ndarray], val_pdfs: list[np.
     return weighted_pdfs, val_expert_weights
 
 
+def clean_pdf(pdf: np.ndarray) -> np.ndarray:
+    """Replace NaNs and Infs, and ensure proper normalization."""
+    pdf = np.nan_to_num(pdf, nan=0.0, posinf=0.0, neginf=0.0)
+    pdf = np.maximum(pdf, 0.0)
+    row_sums = pdf.sum(axis=1, keepdims=True)
+    pdf = np.where(row_sums > 0, pdf / row_sums, 1.0 / pdf.shape[1])
+    return pdf
+
+
 def train_and_estimate(
     train_file: str | Path,
     test_file: str | Path,
@@ -257,21 +273,18 @@ def train_and_estimate(
     pdf_nn2_train = est_nn2.estimate(train_handle).data.pdf(Z_CENTERS)
 
     # 3. Train KNN
-    if is_roman:
-        mag_limits = {
-            'mag_Y_roman': 26.5,
-            'mag_J_roman': 26.5,
-            'mag_H_roman': 26.5
-        }
-    else:
-        mag_limits = {
-            'mag_u_lsst': 26.4,
-            'mag_g_lsst': 27.8,
-            'mag_r_lsst': 27.1,
-            'mag_i_lsst': 26.7,
-            'mag_z_lsst': 25.8,
-            'mag_y_lsst': 24.6
-        }
+    full_mag_limits = {
+        'mag_u_lsst': 26.4,
+        'mag_g_lsst': 27.8,
+        'mag_r_lsst': 27.1,
+        'mag_i_lsst': 26.7,
+        'mag_z_lsst': 25.8,
+        'mag_y_lsst': 24.6,
+        'mag_Y_roman': 26.5,
+        'mag_J_roman': 26.5,
+        'mag_H_roman': 26.5
+    }
+    mag_limits = {k: v for k, v in full_mag_limits.items() if k in bands}
 
     informer_knn = make_clean_stage(
         k_nearneigh.KNearNeighInformer,
@@ -296,7 +309,12 @@ def train_and_estimate(
     pdf_som_train = get_som_pdfs(train_dict, train_dict, bands, ref_band, Z_GRID, max_iter=max_iter_som)
 
     # 5. Train BPZ
-    bpz_filts = ['DC2LSST_u', 'DC2LSST_g', 'DC2LSST_r', 'DC2LSST_i', 'DC2LSST_z', 'DC2LSST_y'] if not is_roman else ['roman_Y106', 'roman_J129', 'roman_H158']
+    if 'mag_Y_roman' in train_dict and ('mag_i_lsst' in train_dict or 'mag_u_lsst' in train_dict):
+        bpz_filts = ['DC2LSST_u', 'DC2LSST_g', 'DC2LSST_r', 'DC2LSST_i', 'DC2LSST_z', 'DC2LSST_y', 'roman_Y106', 'roman_J129', 'roman_H158']
+    elif 'mag_Y_roman' in train_dict:
+        bpz_filts = ['roman_Y106', 'roman_J129', 'roman_H158']
+    else:
+        bpz_filts = ['DC2LSST_u', 'DC2LSST_g', 'DC2LSST_r', 'DC2LSST_i', 'DC2LSST_z', 'DC2LSST_y']
     bpz_zp = [0.01]*len(bpz_filts)
     err_bands = [b + "_err" for b in bands]
 
@@ -367,6 +385,22 @@ def train_and_estimate(
     x_test_aion = aion_pz.build_design_matrix(aion_model, codec_manager, test_dict, device)
     pdf_aion = aion_pz.predict_pz(aion_head, x_test_aion)
     pdf_aion = 0.5 * (pdf_aion[:, :-1] + pdf_aion[:, 1:])
+
+    # 7.5 Clean all PDFs
+    pdf_nn1 = clean_pdf(pdf_nn1)
+    pdf_nn1_train = clean_pdf(pdf_nn1_train)
+    pdf_nn2 = clean_pdf(pdf_nn2)
+    pdf_nn2_train = clean_pdf(pdf_nn2_train)
+    pdf_knn = clean_pdf(pdf_knn)
+    pdf_knn_train = clean_pdf(pdf_knn_train)
+    pdf_som = clean_pdf(pdf_som)
+    pdf_som_train = clean_pdf(pdf_som_train)
+    pdf_bpz = clean_pdf(pdf_bpz)
+    pdf_bpz_train = clean_pdf(pdf_bpz_train)
+    pdf_fzboost = clean_pdf(pdf_fzboost)
+    pdf_fzboost_train = clean_pdf(pdf_fzboost_train)
+    pdf_aion = clean_pdf(pdf_aion)
+    pdf_aion_train = clean_pdf(pdf_aion_train)
 
     # 8. Combine experts using KNN weights
     train_pdfs = [pdf_nn1_train, pdf_nn2_train, pdf_knn_train, pdf_som_train, pdf_bpz_train, pdf_fzboost_train, pdf_aion_train]
@@ -463,21 +497,18 @@ def estimate_only(
     pdf_nn2 = est_nn2.estimate(test_handle).data.pdf(Z_CENTERS)
 
     # 3. KNN
-    if is_roman:
-        mag_limits = {
-            'mag_Y_roman': 26.5,
-            'mag_J_roman': 26.5,
-            'mag_H_roman': 26.5
-        }
-    else:
-        mag_limits = {
-            'mag_u_lsst': 26.4,
-            'mag_g_lsst': 27.8,
-            'mag_r_lsst': 27.1,
-            'mag_i_lsst': 26.7,
-            'mag_z_lsst': 25.8,
-            'mag_y_lsst': 24.6
-        }
+    full_mag_limits = {
+        'mag_u_lsst': 26.4,
+        'mag_g_lsst': 27.8,
+        'mag_r_lsst': 27.1,
+        'mag_i_lsst': 26.7,
+        'mag_z_lsst': 25.8,
+        'mag_y_lsst': 24.6,
+        'mag_Y_roman': 26.5,
+        'mag_J_roman': 26.5,
+        'mag_H_roman': 26.5
+    }
+    mag_limits = {k: v for k, v in full_mag_limits.items() if k in bands}
     est_knn = make_clean_stage(
         k_nearneigh.KNearNeighEstimator,
         name='estimate_knn_eo', model=model_dict["model_knn"], bands=bands, ref_band=ref_band,
@@ -512,6 +543,15 @@ def estimate_only(
     x_test_aion = aion_pz.build_design_matrix(aion_model, codec_manager, test_dict, device)
     pdf_aion = aion_pz.predict_pz(model_dict["aion_head"], x_test_aion)
     pdf_aion = 0.5 * (pdf_aion[:, :-1] + pdf_aion[:, 1:])
+
+    # 7.5 Clean all PDFs
+    pdf_nn1 = clean_pdf(pdf_nn1)
+    pdf_nn2 = clean_pdf(pdf_nn2)
+    pdf_knn = clean_pdf(pdf_knn)
+    pdf_som = clean_pdf(pdf_som)
+    pdf_bpz = clean_pdf(pdf_bpz)
+    pdf_fzboost = clean_pdf(pdf_fzboost)
+    pdf_aion = clean_pdf(pdf_aion)
 
     # 8. Combine experts using saved KNN weights
     test_pdfs = [pdf_nn1, pdf_nn2, pdf_knn, pdf_som, pdf_bpz, pdf_fzboost, pdf_aion]
